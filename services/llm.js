@@ -3,39 +3,38 @@ const axios = require('axios');
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral';
-const GROQ_MODEL = 'mixtral-8x7b-32768';
+const GROQ_MODEL = 'llama3-8b-8192';
 const USE_GROQ = !!GROQ_API_KEY;
 
 function buildSystemPrompt() {
   return `You are Curalink, an expert AI medical research assistant.
-Your role is to help users understand medical research in a clear, accurate, and structured way.
+Help users understand medical research clearly and accurately.
 
-STRICT RULES:
-- Only use information provided in the research context below. Never hallucinate facts.
-- Always cite sources by referencing the publication title or trial name using the [PUB1], [TRIAL1] style tags.
-- Structure your response clearly using the exact sections specified below.
-- If retrieved information is insufficient to answer, say so honestly instead of guessing.
-- Use plain, accessible language. Avoid unnecessary medical jargon unless explaining it.
-- Always end with a disclaimer that this is research information, not medical advice.`;
+RULES:
+- Only use information from the research context provided. Never hallucinate.
+- Cite sources as (PUB1), (PUB2), (TRIAL1) etc.
+- Always end with a disclaimer that this is not medical advice.`;
 }
 
 function buildUserPrompt(userMessage, disease, publications, trials, history) {
+  // Strictly limit each abstract to 200 chars to stay within token limits
   const pubContext = publications
+    .slice(0, 5)
     .map(
       (p, i) =>
         `[PUB${i + 1}] "${p.title}" (${p.platform}, ${p.year})\n` +
-        `Authors: ${p.authors?.join(', ') || 'N/A'}\n` +
-        `Abstract: ${p.abstract || 'Not available'}`
+        `Authors: ${p.authors?.slice(0, 3).join(', ') || 'N/A'}\n` +
+        `Abstract: ${(p.abstract || 'Not available').slice(0, 200)}`
     )
     .join('\n\n');
 
   const trialContext = trials
+    .slice(0, 3)
     .map(
       (t, i) =>
         `[TRIAL${i + 1}] "${t.title}"\n` +
         `Status: ${t.status}\n` +
-        `Location: ${t.location || 'Not specified'}\n` +
-        `Eligibility: ${t.eligibility || 'See full record'}`
+        `Location: ${t.location || 'Not specified'}`
     )
     .join('\n\n');
 
@@ -43,38 +42,37 @@ function buildUserPrompt(userMessage, disease, publications, trials, history) {
     history.length > 0
       ? 'PREVIOUS CONVERSATION:\n' +
         history
-          .slice(-4)
-          .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+          .slice(-2)
+          .map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 200)}`)
           .join('\n') +
         '\n\n'
       : '';
 
-  return `${historyText}PRIMARY DISEASE CONTEXT: ${disease}
-CURRENT USER QUERY: ${userMessage}
+  return `${historyText}DISEASE: ${disease}
+QUERY: ${userMessage}
 
-RESEARCH PUBLICATIONS RETRIEVED:
-${pubContext || 'No publications were retrieved for this query.'}
+PUBLICATIONS:
+${pubContext || 'None retrieved.'}
 
-CLINICAL TRIALS RETRIEVED:
-${trialContext || 'No clinical trials were retrieved for this query.'}
+TRIALS:
+${trialContext || 'None retrieved.'}
 
----
-Using ONLY the information above, respond with EXACTLY this structure:
+Respond with this structure:
 
 ## Condition Overview
-[2-3 sentences giving an overview of the condition relevant to the user query]
+[2-3 sentences about the condition]
 
 ## Research Insights
-[Summarise key findings from the publications. Reference each as (PUB1), (PUB2) etc.]
+[Key findings referencing (PUB1), (PUB2) etc.]
 
 ## Clinical Trials
-[Summarise relevant trials. Reference as (TRIAL1), (TRIAL2) etc.]
+[Summary referencing (TRIAL1) etc.]
 
 ## Key Takeaways
-[3-4 bullet points of the most important insights]
+[3 bullet points]
 
 ## Disclaimer
-This information is for educational and research purposes only and does not constitute medical advice. Always consult a qualified healthcare professional.`;
+This is for educational purposes only, not medical advice. Consult a healthcare professional.`;
 }
 
 async function callGroq(systemPrompt, userPrompt) {
@@ -87,7 +85,7 @@ async function callGroq(systemPrompt, userPrompt) {
         { role: 'user', content: userPrompt },
       ],
       temperature: 0.3,
-      max_tokens: 1200,
+      max_tokens: 1000,
     },
     {
       headers: {
@@ -108,7 +106,7 @@ async function callOllama(systemPrompt, userPrompt) {
       model: OLLAMA_MODEL,
       prompt: fullPrompt,
       stream: false,
-      options: { temperature: 0.3, top_p: 0.9, num_predict: 1200 },
+      options: { temperature: 0.3, top_p: 0.9, num_predict: 1000 },
     },
     { timeout: 120000 }
   );
@@ -118,7 +116,9 @@ async function callOllama(systemPrompt, userPrompt) {
 async function generateResponse(userMessage, disease, publications, trials, history) {
   const systemPrompt = buildSystemPrompt();
   const userPrompt = buildUserPrompt(userMessage, disease, publications, trials, history);
-  console.log(`Using LLM: ${USE_GROQ ? 'Groq' : 'Ollama'}`);
+
+  console.log(`Using LLM: ${USE_GROQ ? 'Groq (' + GROQ_MODEL + ')' : 'Ollama'}`);
+  console.log(`Prompt length: ${userPrompt.length} chars`);
 
   try {
     let response = USE_GROQ
@@ -127,8 +127,10 @@ async function generateResponse(userMessage, disease, publications, trials, hist
 
     if (!response || response.trim() === '') throw new Error('Empty response from LLM');
     return response;
+
   } catch (err) {
     if (USE_GROQ) {
+      console.warn('Groq failed, trying Ollama fallback:', err.message);
       try {
         const fallback = await callOllama(systemPrompt, userPrompt);
         if (fallback) return fallback;
