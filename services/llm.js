@@ -4,8 +4,6 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral';
 const GROQ_MODEL = 'mixtral-8x7b-32768';
-
-// Automatically use Groq if API key is present, else fall back to local Ollama
 const USE_GROQ = !!GROQ_API_KEY;
 
 function buildSystemPrompt() {
@@ -64,22 +62,21 @@ ${trialContext || 'No clinical trials were retrieved for this query.'}
 Using ONLY the information above, respond with EXACTLY this structure:
 
 ## Condition Overview
-[2-3 sentences giving an overview of the condition relevant to the user's query]
+[2-3 sentences giving an overview of the condition relevant to the user query]
 
 ## Research Insights
-[Summarise the key findings from the publications above. Reference each source inline as (PUB1), (PUB2) etc. Be specific, evidence-based, and personalized to the disease context.]
+[Summarise key findings from the publications. Reference each as (PUB1), (PUB2) etc.]
 
 ## Clinical Trials
-[Summarise relevant trials from above. Reference as (TRIAL1), (TRIAL2) etc. Mention their status and what intervention or treatment they are testing.]
+[Summarise relevant trials. Reference as (TRIAL1), (TRIAL2) etc.]
 
 ## Key Takeaways
-[3-4 concise bullet points summarising the most important insights from the research and trials]
+[3-4 bullet points of the most important insights]
 
 ## Disclaimer
-This information is for educational and research purposes only and does not constitute medical advice. Always consult a qualified healthcare professional before making any medical decisions.`;
+This information is for educational and research purposes only and does not constitute medical advice. Always consult a qualified healthcare professional.`;
 }
 
-// ─── Groq (used when deployed / GROQ_API_KEY is set) ────────────────────────
 async function callGroq(systemPrompt, userPrompt) {
   const res = await axios.post(
     'https://api.groq.com/openai/v1/chat/completions',
@@ -100,72 +97,47 @@ async function callGroq(systemPrompt, userPrompt) {
       timeout: 30000,
     }
   );
-
   return res.data?.choices?.[0]?.message?.content || null;
 }
 
-// ─── Ollama (used locally when no GROQ_API_KEY) ──────────────────────────────
 async function callOllama(systemPrompt, userPrompt) {
   const fullPrompt = `[INST] <<SYS>>\n${systemPrompt}\n<</SYS>>\n\n${userPrompt} [/INST]`;
-
   const res = await axios.post(
     `${OLLAMA_URL}/api/generate`,
     {
       model: OLLAMA_MODEL,
       prompt: fullPrompt,
       stream: false,
-      options: {
-        temperature: 0.3,
-        top_p: 0.9,
-        num_predict: 1200,
-      },
+      options: { temperature: 0.3, top_p: 0.9, num_predict: 1200 },
     },
-    { timeout: 120000 } // Ollama can be slower locally, give it 2 minutes
+    { timeout: 120000 }
   );
-
   return res.data?.response || null;
 }
 
-// ─── Main exported function ──────────────────────────────────────────────────
 async function generateResponse(userMessage, disease, publications, trials, history) {
   const systemPrompt = buildSystemPrompt();
   const userPrompt = buildUserPrompt(userMessage, disease, publications, trials, history);
-
-  console.log(`Using LLM: ${USE_GROQ ? 'Groq (' + GROQ_MODEL + ')' : 'Ollama (' + OLLAMA_MODEL + ')'}`);
+  console.log(`Using LLM: ${USE_GROQ ? 'Groq' : 'Ollama'}`);
 
   try {
-    let response = null;
+    let response = USE_GROQ
+      ? await callGroq(systemPrompt, userPrompt)
+      : await callOllama(systemPrompt, userPrompt);
 
-    if (USE_GROQ) {
-      response = await callGroq(systemPrompt, userPrompt);
-    } else {
-      response = await callOllama(systemPrompt, userPrompt);
-    }
-
-    if (!response || response.trim() === '') {
-      throw new Error('LLM returned an empty response.');
-    }
-
+    if (!response || response.trim() === '') throw new Error('Empty response from LLM');
     return response;
-
   } catch (err) {
-    // If Groq fails, try falling back to Ollama automatically
     if (USE_GROQ) {
-      console.warn('Groq failed, attempting Ollama fallback:', err.message);
       try {
         const fallback = await callOllama(systemPrompt, userPrompt);
         if (fallback) return fallback;
-      } catch (fallbackErr) {
-        console.error('Ollama fallback also failed:', fallbackErr.message);
+      } catch (e) {
+        console.error('Ollama fallback failed:', e.message);
       }
     }
-
-    const errMsg = err.response?.data?.error?.message || err.message || 'Unknown error';
-    console.error('LLM error:', errMsg);
     throw new Error(
-      USE_GROQ
-        ? `Groq API error: ${errMsg}. Check your GROQ_API_KEY in .env`
-        : `Ollama error: ${errMsg}. Make sure Ollama is running with: ollama serve`
+      USE_GROQ ? `Groq error: ${err.message}` : `Ollama error: ${err.message}`
     );
   }
 }
