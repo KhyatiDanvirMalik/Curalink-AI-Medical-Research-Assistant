@@ -5,7 +5,6 @@ const BASE = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
 
 async function fetchPubMed(query, maxResults = 80) {
   try {
-    // Step 1: Search for IDs
     const searchRes = await axios.get(`${BASE}/esearch.fcgi`, {
       params: {
         db: 'pubmed',
@@ -19,7 +18,6 @@ async function fetchPubMed(query, maxResults = 80) {
     const ids = searchRes.data.esearchresult?.idlist || [];
     if (ids.length === 0) return [];
 
-    // Step 2: Fetch full details for all IDs
     const fetchRes = await axios.get(`${BASE}/efetch.fcgi`, {
       params: {
         db: 'pubmed',
@@ -32,8 +30,7 @@ async function fetchPubMed(query, maxResults = 80) {
       explicitArray: false,
     });
 
-    const articles =
-      parsed?.PubmedArticleSet?.PubmedArticle || [];
+    const articles = parsed?.PubmedArticleSet?.PubmedArticle || [];
     const list = Array.isArray(articles) ? articles : [articles];
 
     return list.map((art) => {
@@ -44,7 +41,6 @@ async function fetchPubMed(query, maxResults = 80) {
         med?.Abstract?.AbstractText?._ ||
         med?.Abstract?.AbstractText ||
         'No abstract available';
-      const journal = med?.Journal?.Title || '';
       const pubYear =
         med?.Journal?.JournalIssue?.PubDate?.Year ||
         med?.ArticleDate?.Year ||
