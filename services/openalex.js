@@ -43,7 +43,6 @@ async function fetchOpenAlex(query, maxResults = 80) {
   }
 }
 
-// OpenAlex stores abstracts as inverted index {word: [positions]}
 function reconstructAbstract(invertedIndex) {
   if (!invertedIndex) return '';
   const words = {};
