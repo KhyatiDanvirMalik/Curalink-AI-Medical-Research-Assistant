@@ -6,46 +6,40 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral';
 const GROQ_MODEL = 'llama3-8b-8192';
 const USE_GROQ = !!GROQ_API_KEY;
 
+// Log on startup so we can see in Render logs
+console.log('=== LLM CONFIG ===');
+console.log('USE_GROQ:', USE_GROQ);
+console.log('GROQ_API_KEY exists:', !!GROQ_API_KEY);
+console.log('GROQ_API_KEY starts with:', GROQ_API_KEY ? GROQ_API_KEY.slice(0, 8) : 'MISSING');
+console.log('==================');
+
 function buildSystemPrompt() {
-  return `You are Curalink, an AI medical research assistant. Help users understand medical research clearly.
+  return `You are Curalink, an AI medical research assistant.
 RULES:
-- Only use the provided research context. Never make up facts.
+- Only use provided research context. Never make up facts.
 - Cite sources as (PUB1), (PUB2), (TRIAL1) etc.
-- Keep responses concise and well structured.
 - End with a disclaimer that this is not medical advice.`;
 }
 
-function buildUserPrompt(userMessage, disease, publications, trials, history) {
-  // Very strict limits to stay within 6000 tokens total
+function buildUserPrompt(userMessage, disease, publications, trials) {
   const pubContext = publications
-    .slice(0, 4)
+    .slice(0, 3)
     .map(
       (p, i) =>
-        `[PUB${i + 1}] ${p.title} (${p.platform}, ${p.year})\n` +
-        `${(p.abstract || '').slice(0, 150)}`
+        `[PUB${i + 1}] ${String(p.title).slice(0, 100)} (${p.platform}, ${p.year})\n${String(p.abstract || '').slice(0, 120)}`
     )
     .join('\n\n');
 
   const trialContext = trials
-    .slice(0, 3)
+    .slice(0, 2)
     .map(
       (t, i) =>
-        `[TRIAL${i + 1}] ${t.title}\nStatus: ${t.status} | Location: ${
-          t.location || 'N/A'
-        }`
+        `[TRIAL${i + 1}] ${String(t.title).slice(0, 80)}\nStatus: ${t.status}`
     )
     .join('\n\n');
 
-  const historyText =
-    history.length > 0
-      ? history
-          .slice(-2)
-          .map((m) => `${m.role}: ${String(m.content).slice(0, 100)}`)
-          .join('\n') + '\n\n'
-      : '';
-
-  return `${historyText}Disease: ${disease}
-Question: ${userMessage}
+  return `Disease: ${String(disease).slice(0, 50)}
+Question: ${String(userMessage).slice(0, 200)}
 
 Publications:
 ${pubContext || 'None found.'}
@@ -53,7 +47,7 @@ ${pubContext || 'None found.'}
 Trials:
 ${trialContext || 'None found.'}
 
-Reply using exactly these sections:
+Respond with:
 ## Condition Overview
 ## Research Insights
 ## Clinical Trials
@@ -62,29 +56,53 @@ Reply using exactly these sections:
 }
 
 async function callGroq(systemPrompt, userPrompt) {
-  const totalLength = systemPrompt.length + userPrompt.length;
-  console.log(`Total prompt chars: ${totalLength}`);
+  console.log('Calling Groq API...');
+  console.log('System prompt length:', systemPrompt.length);
+  console.log('User prompt length:', userPrompt.length);
+  console.log('Total chars:', systemPrompt.length + userPrompt.length);
 
-  const response = await axios({
-    method: 'post',
-    url: 'https://api.groq.com/openai/v1/chat/completions',
-    headers: {
-      Authorization: `Bearer ${GROQ_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    data: {
-      model: GROQ_MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.3,
-      max_tokens: 800,
-    },
-    timeout: 30000,
-  });
+  const requestBody = {
+    model: GROQ_MODEL,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature: 0.3,
+    max_tokens: 700,
+  };
 
-  return response.data?.choices?.[0]?.message?.content || null;
+  console.log('Request body (truncated):', JSON.stringify({
+    model: requestBody.model,
+    temperature: requestBody.temperature,
+    max_tokens: requestBody.max_tokens,
+    messages_count: requestBody.messages.length,
+    system_length: requestBody.messages[0].content.length,
+    user_length: requestBody.messages[1].content.length,
+  }));
+
+  try {
+    const response = await axios({
+      method: 'post',
+      url: 'https://api.groq.com/openai/v1/chat/completions',
+      headers: {
+        Authorization: `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      data: requestBody,
+      timeout: 30000,
+    });
+
+    console.log('Groq response status:', response.status);
+    return response.data?.choices?.[0]?.message?.content || null;
+
+  } catch (err) {
+    console.error('=== GROQ ERROR DETAILS ===');
+    console.error('Status:', err.response?.status);
+    console.error('Status text:', err.response?.statusText);
+    console.error('Error data:', JSON.stringify(err.response?.data, null, 2));
+    console.error('=========================');
+    throw err;
+  }
 }
 
 async function callOllama(systemPrompt, userPrompt) {
@@ -95,31 +113,18 @@ async function callOllama(systemPrompt, userPrompt) {
       model: OLLAMA_MODEL,
       prompt: fullPrompt,
       stream: false,
-      options: { temperature: 0.3, top_p: 0.9, num_predict: 800 },
+      options: { temperature: 0.3, top_p: 0.9, num_predict: 700 },
     },
     { timeout: 120000 }
   );
   return res.data?.response || null;
 }
 
-async function generateResponse(
-  userMessage,
-  disease,
-  publications,
-  trials,
-  history
-) {
+async function generateResponse(userMessage, disease, publications, trials, history) {
   const systemPrompt = buildSystemPrompt();
-  const userPrompt = buildUserPrompt(
-    userMessage,
-    disease,
-    publications,
-    trials,
-    history
-  );
+  const userPrompt = buildUserPrompt(userMessage, disease, publications, trials);
 
-  console.log(`LLM: ${USE_GROQ ? 'Groq ' + GROQ_MODEL : 'Ollama'}`);
-  console.log(`Prompt size: ${userPrompt.length} chars`);
+  console.log(`Using LLM: ${USE_GROQ ? 'Groq ' + GROQ_MODEL : 'Ollama'}`);
 
   try {
     let response = null;
@@ -135,14 +140,10 @@ async function generateResponse(
     }
 
     return response;
+
   } catch (err) {
-    // Log the full Groq error so we can see exactly what went wrong
-    if (err.response?.data) {
-      console.error(
-        'Groq full error:',
-        JSON.stringify(err.response.data, null, 2)
-      );
-    }
+    const errMsg = err.response?.data?.error?.message || err.message || 'Unknown error';
+    console.error('Final LLM error:', errMsg);
 
     if (USE_GROQ) {
       console.warn('Trying Ollama fallback...');
@@ -154,8 +155,6 @@ async function generateResponse(
       }
     }
 
-    const errMsg =
-      err.response?.data?.error?.message || err.message || 'Unknown error';
     throw new Error(USE_GROQ ? `Groq error: ${errMsg}` : `Ollama error: ${errMsg}`);
   }
 }
