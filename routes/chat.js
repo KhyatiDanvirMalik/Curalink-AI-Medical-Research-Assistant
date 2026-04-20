@@ -7,25 +7,25 @@ const { fetchClinicalTrials } = require('../services/clinicaltrials');
 const { rankPublications, rankTrials } = require('../services/ranker');
 const { generateResponse } = require('../services/llm');
 
-// Query expansion: combine disease + user query intelligently
 function expandQuery(disease, userQuery) {
   const diseaseTerms = disease ? disease.trim() : '';
   const queryTerms = userQuery ? userQuery.trim() : '';
   if (!diseaseTerms) return queryTerms;
-  if (queryTerms.toLowerCase().includes(diseaseTerms.toLowerCase())) return queryTerms;
+  if (queryTerms.toLowerCase().includes(diseaseTerms.toLowerCase()))
+    return queryTerms;
   return `${queryTerms} ${diseaseTerms}`;
 }
 
-// POST /api/chat/message
 router.post('/message', async (req, res) => {
   const { sessionId, userMessage, disease, patientName, location } = req.body;
 
   if (!sessionId || !userMessage) {
-    return res.status(400).json({ error: 'sessionId and userMessage are required.' });
+    return res
+      .status(400)
+      .json({ error: 'sessionId and userMessage are required.' });
   }
 
   try {
-    // Load or create conversation
     let convo = await Conversation.findOne({ sessionId });
     if (!convo) {
       convo = new Conversation({
@@ -37,28 +37,28 @@ router.post('/message', async (req, res) => {
       });
     }
 
-    // Save user message
     convo.messages.push({ role: 'user', content: userMessage });
 
     const expandedQuery = expandQuery(convo.disease, userMessage);
-    const queryTerms = expandedQuery.toLowerCase().split(/\s+/).filter((t) => t.length > 3);
+    const queryTerms = expandedQuery
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((t) => t.length > 3);
 
-    // Parallel retrieval from all 3 sources
+    // Fetch from all 3 sources in parallel
     const [pubmedResults, openalexResults, trialsResults] = await Promise.all([
-      fetchPubMed(expandedQuery, 80),
-      fetchOpenAlex(expandedQuery, 80),
-      fetchClinicalTrials(convo.disease, userMessage, 40),
+      fetchPubMed(expandedQuery, 30),
+      fetchOpenAlex(expandedQuery, 30),
+      fetchClinicalTrials(convo.disease, userMessage, 20),
     ]);
 
-    // Merge publications and rank
     const allPublications = [...pubmedResults, ...openalexResults];
-    const rankedPublications = rankPublications(allPublications, queryTerms, 7);
-    const rankedTrials = rankTrials(trialsResults, 5);
+    // Only top 4 publications and 3 trials to keep prompt small
+    const rankedPublications = rankPublications(allPublications, queryTerms, 4);
+    const rankedTrials = rankTrials(trialsResults, 3);
 
-    // Get conversation history (exclude current user message)
     const history = convo.messages.slice(0, -1);
 
-    // LLM reasoning
     const llmResponse = await generateResponse(
       userMessage,
       convo.disease,
@@ -67,7 +67,6 @@ router.post('/message', async (req, res) => {
       history
     );
 
-    // Save assistant message with sources
     const assistantMessage = {
       role: 'assistant',
       content: llmResponse,
@@ -77,7 +76,7 @@ router.post('/message', async (req, res) => {
         year: p.year,
         url: p.url,
         platform: p.platform,
-        snippet: p.abstract?.slice(0, 200),
+        snippet: p.abstract?.slice(0, 150),
       })),
       trials: rankedTrials.map((t) => ({
         title: t.title,
@@ -93,22 +92,24 @@ router.post('/message', async (req, res) => {
     convo.updatedAt = new Date();
     await convo.save();
 
-    res.json({
-      sessionId,
-      message: assistantMessage,
-    });
+    res.json({ sessionId, message: assistantMessage });
   } catch (err) {
-    console.error('Chat route error:', err);
+    console.error('Chat route error:', err.message);
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
-// GET /api/chat/history/:sessionId
 router.get('/history/:sessionId', async (req, res) => {
   try {
-    const convo = await Conversation.findOne({ sessionId: req.params.sessionId });
+    const convo = await Conversation.findOne({
+      sessionId: req.params.sessionId,
+    });
     if (!convo) return res.json({ messages: [] });
-    res.json({ messages: convo.messages, disease: convo.disease, patientName: convo.patientName });
+    res.json({
+      messages: convo.messages,
+      disease: convo.disease,
+      patientName: convo.patientName,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
