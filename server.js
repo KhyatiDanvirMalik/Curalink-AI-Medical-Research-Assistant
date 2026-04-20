@@ -10,13 +10,25 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// API routes
 app.use('/api/chat', chatRoutes);
 
-app.use(express.static(path.join(__dirname, 'build')));
+// Serve React frontend if build folder exists
+const buildPath = path.join(__dirname, 'build');
+const fs = require('fs');
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
-});
+if (fs.existsSync(buildPath)) {
+  console.log('Serving frontend from build folder');
+  app.use(express.static(buildPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(buildPath, 'index.html'));
+  });
+} else {
+  console.log('No build folder found - API only mode');
+  app.get('/', (req, res) => {
+    res.json({ status: 'Curalink API running', message: 'Frontend not built yet' });
+  });
+}
 
 mongoose
   .connect(process.env.MONGO_URI)
