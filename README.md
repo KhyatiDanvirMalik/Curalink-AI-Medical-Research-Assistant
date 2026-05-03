@@ -1,7 +1,7 @@
-# Curalink — AI Medical Research Assistant
+# AI Medical Research Assistant
 
 ## 🔬 Overview
-Curalink is a full-stack AI-powered Medical Research Assistant built on the MERN stack. It acts as a health research companion that understands your condition, searches the latest medical literature, and delivers structured, source-backed answers through a conversational interface.
+It is a full-stack AI-powered Medical Research Assistant built on the MERN stack. It acts as a health research companion that understands your condition, searches the latest medical literature, and delivers structured, source-backed answers through a conversational interface.
 
 **Live Demo:** https://curalink-ai-medical-research-assistant-w0gl.onrender.com
 
@@ -91,7 +91,7 @@ All three are completely free with no API keys required.
 
 ```bash
 # Clone the repo
-git clone https://github.com/KhyatiDanvirMalik/Curalink-AI-Medical-Research-Assistant
+git clone https://github.com/KhyatiDanvirMalik/AI-Medical-Research-Assistant
 
 # Install backend dependencies
 cd backend
